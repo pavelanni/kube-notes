@@ -1,0 +1,60 @@
+.Situation
+
+A question from one of my students: what if I know that my `.kube/config` file
+is stolen and I want to deny access to the cluster with my username/token stored in
+that file?
+
+I'm still looking for a better solution, but so far here is what I came up with:
+
+. Delete the user:
++
+----
+$ oc delete user user99
+----
+
+. When you try to login as that user you get:
++
+----
+Authentication required for https://api.cluster-09ec.09ec.ocp4.opentlc.com:6443 (openshift)
+Username: user99
+Password:
+Error from server (InternalError): Internal error occurred: unexpected response: 500
+----
+
+. Now you want to recreate that user:
++
+----
+$ oc create user user99
+user.user.openshift.io/user99 created
+$ oc get users
+NAME          UID                                    FULL NAME   IDENTITIES
+opentlc-mgr   f23a2ba1-a877-11e9-aba8-0a580a810032               htpasswd_provider:opentlc-mgr
+user26        d3982a7f-a87c-11e9-aba8-0a580a810032               htpasswd_provider:user26
+user42        4b8aa833-a87d-11e9-aba8-0a580a810032               htpasswd_provider:user42
+user7         21f37541-a88c-11e9-97c1-0a580a820029               htpasswd_provider:user7
+user8         1cda3f9c-a898-11e9-aba8-0a580a810032               htpasswd_provider:user8
+user99        4a0c5e75-a8c8-11e9-97c1-0a580a820029
+----
+
+. So the user is here, but it doesn't have an identity.
+That means you can't login with the password you used before.
+You can try to create an identity, but you'll get an error:
++
+----
+$ oc create identity htpasswd_provider:user99
+Error from server (AlreadyExists): identities.user.openshift.io "htpasswd_provider:user99" already exists
+----
+
+. Which means you have to create a `useridentitymapping` to the existing identity:
++
+----
+$ oc create useridentitymapping htpasswd_provider:user99 user99
+useridentitymapping.user.openshift.io/htpasswd_provider:user99 created
+$ oc login -u user99
+Authentication required for https://api.cluster-09ec.09ec.ocp4.opentlc.com:6443 (openshift)
+Username: user99
+Password:
+Login successful.
+----
+
+Success!
