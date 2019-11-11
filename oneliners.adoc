@@ -1,0 +1,10 @@
+= Kubernetes / OpenShift one-liners
+
+List projects and their creators (owners, requestors)
+
+[source]
+----
+$ oc get projects -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.annotations.openshift\.io/requester}  {"\n"}'
+----
+
+
