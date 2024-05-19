@@ -1,0 +1,138 @@
+= Certificates for Kubernetes cluster
+
+I have a simple two-node Kubernetes cluster in my home network.
+I experimented with various applications and quickly got tired of accepting "Yes, I understand the security risk" while
+using ingress routes to some of my application.
+So, the solution seemed obvious: use Let's Encrypt and cert-manager.
+It went well overall, with a couple of strange glitches.
+Here are my notes. I hope they might be helpful if you want to add certificates to your homelab cluster.
+
+== Domain registrar
+
+Of course, you need a domain name for your home lab.
+You have plenty of choices where to register you new domain, but keep in mind
+that some of the registrars are easier to work with when it comes to confirming to `cert-manager` that you own this domain.
+
+There are two ways to confirm that you own the domain.
+One is called HTTP-01.
+In short, it assumes that you have a web server visible from the outside world and you put a token provided by Let's Encrypt
+in a special location on your server.
+Let's Encrypt sees the token and confirms that you indeed own this domain.
+More details: link:https://letsencrypt.org/docs/challenge-types/#http-01-challenge[HTTP-01 challenge].
+I didn't plan to put any of the servers online so I decided to use the other way.
+
+The other challenge is called DNS-01.
+You have to place a special TXT record on your DNS provider.
+Let's Encrypt checks it and confirms that you own this domain.
+More details: link:https://letsencrypt.org/docs/challenge-types/#dns-01-challenge[DNS-01 challenge].
+It can be done manually, of course, but there are tools to make this easier.
+On standalone web servers you can use link:https://certbot.eff.org/[certbot].
+For Kubernetes cluster the solution is using link:https://cert-manager.io/[cert-manager].
+
+Both of the tools have documentation and additional plugins for _some_ DNS providers.
+So if you have a choice, it's better to use a DNS registrar from the list of the providers with good support for both tools.
+
+Cert-manager's list includes:
+
+* Akamai
+* AzureDNS
+* Cloudflare
+* DigitalOcean
+* Google CloudDNS
+* AWS Route53
+
+Check the latest list at https://cert-manager.io/docs/configuration/acme/dns01/#supported-dns01-providers
+
+Certbot has plugins for several providers (including Cloudflare, DigitalOcean, Linode, etc.):
+https://eff-certbot.readthedocs.io/en/latest/using.html#dns-plugins
+
+I decided to register my domain with Cloudflare to be on the safe side.
+
+
+== Cloudflare API token
+
+The easiest way to find the place where you create an API token is to search on the main Cloudflare page.
+Apparently, it's in the _My Profile_ section.
+
+Use the template called "Edit zone DNS".
+In the Permissions section use "+Add more" to add the "Zone, Zone, Read" permission.
+In the Zone Resources section use "Include, All zones from an account, <your account>".
+Set TTL to a period that seems reasonable to you.
+I set it to one year.
+
+Make sure you saved your token in a file somewhere.
+
+== Install cert-manager
+
+I used the link:https://cert-manager.io/docs/installation/helm/[Helm chart] way for that.
+Don't forget to uncomment `--set installCRDs=true` in the command line example.
+
+== Secret and Issuer
+
+Follow the instructions from link:https://cert-manager.io/docs/configuration/acme/dns01/cloudflare/[here] to create
+the secret containing the API token and the Issuer.
+I wanted my Issuer to work in multiple namespaces so I created a ClusterIssuer.
+The Secret in this case should be created in the `cert-manager` link:https://cert-manager.io/docs/configuration/#cluster-resource-namespace[namespace].
+
+Make sure you add the `selector.dnsZones` part to the ClusterIssuer manifest.
+It's not mentioned in the Cloudflare-specific part, only in the general ACME part.
+More here: https://cert-manager.io/docs/configuration/acme/#dns-zones
+
+This part:
+
+[source,yaml]
+----
+    privateKeySecretRef:
+      name: letsencrypt-cloudflare
+----
+
+specifies the secret that _will be created_ by cert-manager.
+You don't have to create it (yes, I was looking for instructions on creating it first).
+Choose any name you want.
+
+== Ingress
+
+I created a simple "Hello world" application with a simple Ingress from here: https://kubernetes.io/docs/tasks/access-application-cluster/ingress-minikube/
+
+Then I added annotations specific to my certificate config.
+
+This part:
+
+[source,yaml]
+----
+  tls:
+  - hosts:
+    - hello.mydomain.dev
+    secretName: hello-cert
+----
+
+specifies the name of the secret where your TLS certificate and key will be stored for this ingress.
+You don't have to create this secret beforehand.
+Choose any name you want.
+
+
+== Gotchas
+
+=== Search domain in `etc/resolv.conf`
+
+I kept seeing messages like this:
+
+[source]
+----
+"ACME server URL host and ACME private key registration host differ. Re-checking ACME account registration"
+----
+
+in the logs of my `cert-manager-796cb...` pod in the `cert-manager` namespace.
+
+After googling around I found this link:https://github.com/cert-manager/cert-manager/issues/3394[discussion]
+that told me to remove the `search mydomain.dev` line from my `/etc/resolv.conf` file.
+I still don't understand how this could cause issues with cert-manager, but everything started working
+after I removed it.
+
+In my case, the way to remove it was to remove it from my Unifi Dream Machine DNS config from which
+my Kubernetes master server was taking it.
+
+It seems that it's not possible or at least not easy to add custom names to the UDM's DNS setup.
+For example, I'd like to add my new ingress routes like `hello.mydomain.dev`, etc.
+So far I solved it by adding them to the `/etc/hosts` file on the client host, but it's not the right way.
+Maybe, I'll switch to a separate DNS server -- PiHole, maybe?
