@@ -1,0 +1,134 @@
+= Running MinIO on Kubernetes
+
+Started: 2024-05-25
+
+== Home cluster setup
+
+I have a simple two-node cluster in my home network.
+I decided to install a MinIO object store on it.
+After some experiments and failures with the MinIO operator I ended up removing one of the nodes from the cluster to make it simpler.
+
+I think the main reason was that my worker node uses Fedora 40 (while my master is running RHEL 9.4) and the worker node
+has SELinux set to "enforcing" and some of the policies are not set properly.
+I didn't want to just disable it and I'm going to figure out how to set up SELinux on Kubernetes nodes properly.
+But that's another project.
+For now I wanted to make sure the MinIO setup is working properly.
+
+== DirectPV
+
+MinIO developed their own CSI driver for Direct Attached Storage called DirectPV.
+They explain that it's a "better version" of Kubernetes' `hostPath`.
+More about it here: https://min.io/directpv
+
+So I followed their advice and installed the `directpv` plugin for `kubectl` and used it to initialize drives.
+
+To initialize drives you have to have partitions that are not mounted.
+In my case, I had an additional 1 TB drive that wasn't in use.
+
+== MinIO Operator
+
+I installed the MinIO operator, first, using the `minio` plugin for `kubectl` and then using Helm.
+Both ways worked just fine.
+I guess the Helm-based way is a bit more configurable.
+(I have to admit that I started using Helm instead of the plugin while trying to debug my issues.
+Apparently, the problem was not in the operator or in the way it was installed.)
+
+== MinIO Operator Console
+
+I followed the documentation and used `kubectl minio proxy` to get access to the MinIO operator Console.
+I created my first tenant using the Console UI.
+I configured one server and two disks.
+
+Then I added a user with a test password.
+
+== Test from inside the cluster.
+
+I used the `minio/mc` container to access my tenant from inside the cluster.
+Here is the pod manifest:
+
+[source,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mc
+  labels:
+    app: mc
+spec:
+  containers:
+  - name: mc
+    image: minio/mc:latest
+    command: ["sleep", "86400"]
+----
+
+I started this pod in the same namespace where your tenant is located.
+Then I added an alias using the `mc` command:
+
+[source,console]
+----
+mc alias set pavel minio.pavel-data.svc.cluster.local pavel mysecretpassword
+----
+
+Where the first `pavel` is the alias name, `minio.pavel-data.svc.cluster.local` is the service name
+(in the `pavel-data` namespace). The second `pavel` is the username I created in the Console.
+
+I used a simple `mc mb pavel/first` command to create my first bucket.
+Then I copied a file with `mc cp`.
+So far, so good.
+
+I checked that the bucket and the file existed in the Console.
+
+== Ingress
+
+Recently, I configured a domain with proper certificates from Let's Encrypt in my cluster,
+so I wanted to have an Ingress looking like `pavel.pavelanni.dev` to use it
+with the `mc` command on my other computers outside of the cluster.
+
+After some experimentation and consulting with the documentation and ChatGPT, here is my Ingress YAML.
+
+[source,yaml]
+----
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-ingress
+  namespace: pavel-data
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    cert-manager.io/cluster-issuer: "letsencrypt-cloudflare"
+spec:
+  tls:
+  - hosts:
+    - pavel.pavelanni.dev
+    secretName: pavelanni-dev-tls
+  rules:
+  - host: pavel.pavelanni.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: minio
+            port:
+              number: 443
+----
+
+Apparently, the line with `backend-protocol: HTTPS` is important.
+I guess it should be possible to run the service exposing port 80 and let the ingress do the TLS part.
+
+It works now. I created an alias pointing to that name and tested it with `mb`, `ls`, and `cp`.
+So far, so good.
+
+== Creating tenants via command line
+
+Sometimes creating tenants via the console is not very convenient, especially when you want to automate it.
+
+This can be done via the `k minio tenant create` command.
+The same command can produce a YAML output (with the `-o` flag) which you can use as a template.
+
+
+
+
+
